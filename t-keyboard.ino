@@ -29,12 +29,8 @@ INT - PIN 8
 Further documentation of the keyboard itself can be found here: https://github.com/arturo182/bbq10kbd
 */
 
-// TODO: sym + enter = meta key
-
 #include "Arduino.h"
-#include <SPI.h>
 #include "Wire.h"
-#include <string.h>  // Required for strncpy()
 
 /*
 0x1f is the address used by arturo182 in his original keyboard firmware
@@ -45,9 +41,8 @@ https://github.com/arturo182/arduino_bbq10kbd
 #define SDA_PIN 2
 #define SCL_PIN 10
 #define keyboard_BL_PIN 9
-#define MAX_KEYSTROKE_LENGTH 20
-#define REPEAT_DELAY 1000 // 1 second in millis
-#define REPEAT_SPEED 33 // Millis of delay before repeating a held down keystroke - 1s delay before repeating every 33ms is the default in Windows
+#define REPEAT_DELAY 1000 // 1 second in millis - amount of time a key needs to be held down before it starts repeating
+#define REPEAT_SPEED 33 // 33 millis of delay before repeating a held down keystroke - 1s delay before repeating every 33ms is the default in Windows
 
 byte rows[] = { 0, 3, 19, 12, 18, 6, 7 };
 const int rowCount = sizeof(rows) / sizeof(rows[0]);
@@ -61,25 +56,49 @@ bool changedValue[colCount][rowCount];
 unsigned long startMillis;
 unsigned long lastMillis;
 
-// Use const char* to indicate these are string literals
-const char* keyboard[colCount][rowCount];
-const char* keyboard_symbol[colCount][rowCount];
+char keyboard[colCount][rowCount];
+char keyboard_symbol[colCount][rowCount];
 
 bool allowKeystroke = true;
 bool symbolSelected;
-bool keyboard_BL_state = true;
+int keyboard_BL = 255;
 bool case_locking = false;
 bool alt_active = false;
-char keystroke[MAX_KEYSTROKE_LENGTH] = "";  // Use char array directly
+
+char keystroke[1] = ""; // This stores the current keystroke
 
 void readMatrix();
 void printMatrix();
 bool keyPressed(int colIndex, int rowIndex);
 bool keyActive(int colIndex, int rowIndex);
 bool isPrintableKey(int colIndex, int rowIndex);
-void set_keyboard_BL(bool state);
-void print();
-uint32_t i = 0;
+void set_keyboard_BL(int state);
+
+void onRequest() {
+  if((uint8_t)keystroke[0] != 0) {
+    Serial.print(keystroke);
+    Serial.print(": ");
+    Serial.println((uint8_t)keystroke[0]);
+  }
+
+  // Unassigned ASCII ISO 8859-1 numbers: 129, 141, 143, 144, 157
+  //if(alt_active) {}
+  //if(case_locking) {}
+  
+  // We can only write 8 bits
+  Wire.write((uint8_t)keystroke[0]);
+  
+  // Clear keystroke buffer
+  memset(keystroke, '\0', 1);
+}
+
+void onReceive(int len) {
+  Serial.printf("onReceive[%d]: ", len);
+  while (Wire.available()) {
+    Serial.write(Wire.read());
+  }
+  Serial.println();
+}
 
 void setup() {
   Serial.begin(115200);
@@ -94,104 +113,106 @@ void setup() {
   Serial.println(SCL_PIN);
 
   // Initalise our device as an I2C slave using the correct pins
+  Wire.onReceive(onReceive);
+  Wire.onRequest(onRequest);
   Wire.setPins(SDA_PIN, SCL_PIN);
   Wire.begin((uint8_t)I2C_ADDR);
   // Set I2C clock speed at standard mode
   Wire.setClock(100000);
 
   // Column 1
-  keyboard[0][0] = "q";
-  keyboard[0][1] = "w";
-  keyboard[0][2] = "SYM";  // symbol
-  keyboard[0][3] = "a";
-  keyboard[0][4] = "ALT";  // ALT
-  keyboard[0][5] = " ";
-  keyboard[0][6] = "MIC";  // Mic
+  keyboard[0][0] = 'q';
+  keyboard[0][1] = 'w';
+  keyboard[0][2] = NULL;  // SYM
+  keyboard[0][3] = 'a';
+  keyboard[0][4] = NULL;  // ALT
+  keyboard[0][5] = ' '; // Space
+  keyboard[0][6] = NULL;  // Mic
 
   // Column 2
-  keyboard[1][0] = "e";
-  keyboard[1][1] = "s";
-  keyboard[1][2] = "d";
-  keyboard[1][3] = "p";
-  keyboard[1][4] = "x";
-  keyboard[1][5] = "z";
-  keyboard[1][6] = "LSHIFT";  // Left Shift
+  keyboard[1][0] = 'e';
+  keyboard[1][1] = 's';
+  keyboard[1][2] = 'd';
+  keyboard[1][3] = 'p';
+  keyboard[1][4] = 'x';
+  keyboard[1][5] = 'z';
+  keyboard[1][6] = NULL;  // Left Shift
 
   // Column 3
-  keyboard[2][0] = "r";
-  keyboard[2][1] = "g";
-  keyboard[2][2] = "t";
-  keyboard[2][3] = "RSHIFT";  // Right Shift
-  keyboard[2][4] = "v";
-  keyboard[2][5] = "c";
-  keyboard[2][6] = "f";
+  keyboard[2][0] = 'r';
+  keyboard[2][1] = 'g';
+  keyboard[2][2] = 't';
+  keyboard[2][3] = NULL;  // Right Shift
+  keyboard[2][4] = 'v';
+  keyboard[2][5] = 'c';
+  keyboard[2][6] = 'f';
 
   // Column 4
-  keyboard[3][0] = "u";
-  keyboard[3][1] = "h";
-  keyboard[3][2] = "y";
-  keyboard[3][3] = "ENTER";  // Enter
-  keyboard[3][4] = "b";
-  keyboard[3][5] = "n";
-  keyboard[3][6] = "j";
+  keyboard[3][0] = 'u';
+  keyboard[3][1] = 'h';
+  keyboard[3][2] = 'y';
+  keyboard[3][3] = '\n';  // Enter
+  keyboard[3][4] = 'b';
+  keyboard[3][5] = 'n';
+  keyboard[3][6] = 'j';
 
   // Column 5
-  keyboard[4][0] = "o";
-  keyboard[4][1] = "l";
-  keyboard[4][2] = "i";
-  keyboard[4][3] = "BACKSPACE";  // Backspace
-  keyboard[4][4] = "$";
-  keyboard[4][5] = "m";
-  keyboard[4][6] = "k";
+  keyboard[4][0] = 'o';
+  keyboard[4][1] = 'l';
+  keyboard[4][2] = 'i';
+  keyboard[4][3] = '\b';  // Backspace
+  keyboard[4][4] = '$';
+  keyboard[4][5] = 'm';
+  keyboard[4][6] = 'k';
 
   // Column 1 (alt keys)
-  keyboard_symbol[0][0] = "#";
-  keyboard_symbol[0][1] = "1";
-  keyboard_symbol[0][2] = "";
-  keyboard_symbol[0][3] = "*";
-  keyboard_symbol[0][4] = "";
-  keyboard_symbol[0][5] = "";
-  keyboard_symbol[0][6] = "0";
+  keyboard_symbol[0][0] = '#';
+  keyboard_symbol[0][1] = '1';
+  keyboard_symbol[0][2] = NULL;
+  keyboard_symbol[0][3] = '*';
+  keyboard_symbol[0][4] = NULL;
+  keyboard_symbol[0][5] = NULL;
+  keyboard_symbol[0][6] = '0';
 
   // Column 2 (alt keys)
-  keyboard_symbol[1][0] = "2";
-  keyboard_symbol[1][1] = "4";
-  keyboard_symbol[1][2] = "5";
-  keyboard_symbol[1][3] = "@";
-  keyboard_symbol[1][4] = "8";
-  keyboard_symbol[1][5] = "7";
-  keyboard_symbol[1][6] = "";
+  keyboard_symbol[1][0] = '2';
+  keyboard_symbol[1][1] = '4';
+  keyboard_symbol[1][2] = '5';
+  keyboard_symbol[1][3] = '@';
+  keyboard_symbol[1][4] = '8';
+  keyboard_symbol[1][5] = '7';
+  keyboard_symbol[1][6] = NULL;
 
   // Column 3 (alt keys)
-  keyboard_symbol[2][0] = "3";
-  keyboard_symbol[2][1] = "/";
-  keyboard_symbol[2][2] = "(";
-  keyboard_symbol[2][3] = "";
-  keyboard_symbol[2][4] = "?";
-  keyboard_symbol[2][5] = "9";
-  keyboard_symbol[2][6] = "6";
+  keyboard_symbol[2][0] = '3';
+  keyboard_symbol[2][1] = '/';
+  keyboard_symbol[2][2] = '(';
+  keyboard_symbol[2][3] = NULL;
+  keyboard_symbol[2][4] = '?';
+  keyboard_symbol[2][5] = '9';
+  keyboard_symbol[2][6] = '6';
 
   // Column 4 (alt keys)
-  keyboard_symbol[3][0] = "_";
-  keyboard_symbol[3][1] = ":";
-  keyboard_symbol[3][2] = ")";
-  keyboard_symbol[3][3] = "";
-  keyboard_symbol[3][4] = "!";
-  keyboard_symbol[3][5] = ",";
-  keyboard_symbol[3][6] = ";";
+  keyboard_symbol[3][0] = '_';
+  keyboard_symbol[3][1] = ':';
+  keyboard_symbol[3][2] = ')';
+  keyboard_symbol[3][3] = NULL;
+  keyboard_symbol[3][4] = '!';
+  keyboard_symbol[3][5] = ',';
+  keyboard_symbol[3][6] = ';';
 
   // Column 5 (alt keys)
-  keyboard_symbol[4][0] = "+";
-  keyboard_symbol[4][1] = "\"";
-  keyboard_symbol[4][2] = "-";
-  keyboard_symbol[4][3] = "";
-  keyboard_symbol[4][4] = "SPEAKER";  //Speaker key
-  keyboard_symbol[4][5] = ".";
-  keyboard_symbol[4][6] = "\'";
+  keyboard_symbol[4][0] = '+';
+  keyboard_symbol[4][1] = '\"';
+  keyboard_symbol[4][2] = '-';
+  keyboard_symbol[4][3] = NULL;
+  keyboard_symbol[4][4] = 'SPK';  //Speaker key
+  keyboard_symbol[4][5] = '.';
+  keyboard_symbol[4][6] = '\'';
 
   delay(100);
   pinMode(keyboard_BL_PIN, OUTPUT);
-  set_keyboard_BL(keyboard_BL_state);
+  set_keyboard_BL(keyboard_BL);
 
   for (int x = 0; x < rowCount; x++) {
     Serial.print(rows[x]);
@@ -212,42 +233,48 @@ void setup() {
 
 
 void loop() {
-  if (alt_active && keyPressed(3, 4)) {  // alt+b, change keyboard backlight status
-    alt_active = false;
-    keyboard_BL_state = !keyboard_BL_state;
-    set_keyboard_BL(keyboard_BL_state);
-    startMillis = millis();
+  // When alt is toggled on and b is pressed, change the backlight state
+  if (alt_active && keyPressed(3, 4)) {
+    if(keyboard_BL == 0) { keyboard_BL = 255;}
+    else { keyboard_BL = keyboard_BL - 85; }
+    set_keyboard_BL(keyboard_BL);
   }
 
-  if (keyPressed(2, 3)) {  // Right shift, toggle case locking
+  // Right shift, toggle case locking
+  if (keyPressed(2, 3)) {
     case_locking = !case_locking;
+  }
+
+  // Alt lock toggle
+  if (keyPressed(0, 4)) {
+    alt_active = !alt_active;
   }
 
   if (true) {
     readMatrix();
     printMatrix();
-    print();
   }
 }
 
-// Keyboard backlight status
-void set_keyboard_BL(bool state) {
-  digitalWrite(keyboard_BL_PIN, state);
+// Keyboard backlight status - use analogWrite for brightness level controls, digitalWrite for on/off
+void set_keyboard_BL(int state) {
+  analogWrite(keyboard_BL_PIN, state);
+  //digitalWrite(keyboard_BL_PIN, state);
 }
 
 void readMatrix() {
-  // iterate the columns
+  // Iterate the columns
   for (int colIndex = 0; colIndex < colCount; colIndex++) {
-    // col: set to output to low
+    // Col: set to output to low
     byte curCol = cols[colIndex];
     pinMode(curCol, OUTPUT);
     digitalWrite(curCol, LOW);
 
-    // row: interate through the rows
+    // Row: interate through the rows
     for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
       byte rowCol = rows[rowIndex];
       pinMode(rowCol, INPUT_PULLUP);
-      delay(1);  // arduino is not fast enought to switch input/output modes so wait 1 ms
+      delay(1);  // Arduino is not fast enought to switch input/output modes so wait 1 ms
 
       bool buttonPressed = (digitalRead(rowCol) == LOW);
 
@@ -261,13 +288,13 @@ void readMatrix() {
       lastValue[colIndex][rowIndex] = buttonPressed;
       pinMode(rowCol, INPUT);
     }
-    // disable the column
+    // Disable the column
     pinMode(curCol, INPUT);
   }
 
   if (keyPressed(0, 2)) {
+    // Maybe implement SYM key lock?
     symbolSelected = true;
-    // symbolSelected = !symbolSelected;
   }
 }
 
@@ -285,28 +312,22 @@ bool keyActive(int colIndex, int rowIndex) {
 }
 
 bool isPrintableKey(int colIndex, int rowIndex) {
-  if (symbolSelected){
-    return (keyboard_symbol[colIndex][rowIndex] != NULL && strlen(keyboard_symbol[colIndex][rowIndex]) == 1);
-  }
-  else{
-    return (keyboard[colIndex][rowIndex] != NULL && strlen(keyboard[colIndex][rowIndex]) == 1);
-  }
-  //return (keyboard_symbol[colIndex][rowIndex] != NULL || keyboard[colIndex][rowIndex] != NULL);
+  return (keyboard_symbol[colIndex][rowIndex] != NULL || keyboard[colIndex][rowIndex] != NULL);
 }
 
 
 void printMatrix() {
   for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     for (int colIndex = 0; colIndex < colCount; colIndex++) {
-      // we only want to print if the key is pressed and it is a printable character
+      // We only want to print if the key is pressed and it is a printable character
       if ((keyPressed(colIndex, rowIndex) || keyHeld(colIndex, rowIndex)) && isPrintableKey(colIndex, rowIndex)) {
-        //Check to see if this keypress has changed since the last check
+        // Check to see if this keypress has changed since the last check
         if (keyPressed(colIndex, rowIndex)){
           startMillis = millis();
           lastMillis = millis();
           allowKeystroke = true;
         }
-        //If not, allow the keystroke to repeat if enough time has elapsed since the first keystroke and make sure it isn't repeating too fast
+        // If not, allow the keystroke to repeat if enough time has elapsed since the first keystroke and make sure it isn't repeating too fast
         else{
           if((millis() > (startMillis + REPEAT_DELAY)) && millis() > lastMillis && isPrintableKey(colIndex, rowIndex)){
             lastMillis = millis() + REPEAT_SPEED;
@@ -317,40 +338,18 @@ void printMatrix() {
         if(allowKeystroke){
           if (symbolSelected) {
             symbolSelected = false;
-            strncpy(keystroke, keyboard_symbol[colIndex][rowIndex], MAX_KEYSTROKE_LENGTH - 1);
+            keystroke[0] = keyboard_symbol[colIndex][rowIndex];
           } else {
-            strncpy(keystroke, keyboard[colIndex][rowIndex], MAX_KEYSTROKE_LENGTH - 1);
+            keystroke[0] = keyboard[colIndex][rowIndex];
           }
-          keystroke[MAX_KEYSTROKE_LENGTH - 1] = '\0';  // Ensure null termination
 
-          if (keyActive(0, 4)) {
-            alt_active = true;
-            keys[0][4] = false;
-            return;
-          }
-          // keys 1,6 and 2,3 are shift keys, so we want to upper case
+          // Keys 1,6 and 2,3 are shift keys, so we want to upper case
           if (case_locking || keyActive(1, 6)) {
-            for (int i = 0; keystroke[i]; i++) {
-              keystroke[i] = toupper(keystroke[i]);
-            }
+            keystroke[0] = toupper(keystroke[0]);
           }
         }
         allowKeystroke = false;
       }
     }
-  }
-}
-
-void print() {
-  if (strlen(keystroke) != 0) {
-    Serial.println(keystroke);
-    size_t len = strlen(keystroke);
-    uint8_t buffer[len];
-    for (size_t i = 0; i < len; i++) {
-      buffer[i] = (uint8_t)keystroke[i];
-    }
-    Wire.write(buffer, len);
-    // Clear keystroke buffer
-    memset(keystroke, 0, MAX_KEYSTROKE_LENGTH);
   }
 }
