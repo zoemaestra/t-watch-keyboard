@@ -6,10 +6,6 @@ To use this board, you will need an external USB to serial adapter that works at
 
 In Arduino IDE, select your board as the TTGO T-OI PLUS RISC-V ESP32-C3, since this is the closest board in the list to what you're working with. If it doesn't appear, you'll need to add the ESP32 board list to the IDE. There's plenty of tutorials online for this.
 
-You'll also want to manually change the pins in your pins_arduino.h for the board. In my case, this is located at `C:\Users\Zoe\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.1.1\variants\ttgo-t-oi-plus\pins_arduino.h`
-
-Modify it so SDA = 2 and SCL = 10. Don't forget the semicolons! Save, close file and relaunch the IDE.
-
 In the IDE with the TTGO T-OI PLUS RISC-V ESP32-C3 selected and your board with serial adapter connected, make sure you have the following options set:
 
 ![image](https://github.com/user-attachments/assets/a285c2cf-c099-4681-ad4e-7b14168d294f)
